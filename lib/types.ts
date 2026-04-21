@@ -15,7 +15,13 @@ export interface DetectionResponse {
   timestamp: string
   location: string
   detections: BoundingBox[]
-  annotated_media_url?: string
+  annotated_media_url?: string | null
+  annotated_media_available?: boolean
+  annotated_media_previewable?: boolean
+  annotated_media_download_url?: string | null
+  annotated_media_format?: string | null
+  annotated_media_warning?: string | null
+  processing_notes?: string | null
 }
 
 export interface Incident {

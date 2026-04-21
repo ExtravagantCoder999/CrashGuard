@@ -1,14 +1,80 @@
 'use client'
 
+import { useEffect, useState } from 'react'
+
 import { Sidebar, DashboardHeader } from '@/components/dashboard-sidebar'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Settings2, Save, RotateCcw } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+  RotateCcw,
+  Save,
+  Settings2,
+} from 'lucide-react'
+import {
+  BACKEND_URL,
+  BACKEND_URL_SOURCE,
+  IS_DEFAULT_BACKEND_URL,
+  checkBackendHealth,
+} from '@/lib/api-client'
 
 export default function SettingsPage() {
+  const [backendStatus, setBackendStatus] = useState<
+    'checking' | 'reachable' | 'unreachable'
+  >('checking')
+  const [healthTimestamp, setHealthTimestamp] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadBackendHealth() {
+      const health = await checkBackendHealth()
+
+      if (cancelled) {
+        return
+      }
+
+      if (health.status === 'ok') {
+        setBackendStatus('reachable')
+        setHealthTimestamp(health.timestamp)
+        return
+      }
+
+      setBackendStatus('unreachable')
+      setHealthTimestamp(null)
+    }
+
+    void loadBackendHealth()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const backendStatusIndicatorClass =
+    backendStatus === 'reachable'
+      ? 'bg-green-500'
+      : backendStatus === 'unreachable'
+        ? 'bg-destructive'
+        : 'bg-amber-500'
+  const backendStatusLabel =
+    backendStatus === 'reachable'
+      ? 'Health check passed'
+      : backendStatus === 'unreachable'
+        ? 'Health check failed'
+        : 'Checking backend health'
+  const backendStatusBadge =
+    backendStatus === 'reachable'
+      ? 'Reachable'
+      : backendStatus === 'unreachable'
+        ? 'Not reachable'
+        : 'Checking'
+
   return (
     <div className="flex min-h-screen bg-background">
       <Sidebar />
@@ -36,21 +102,71 @@ export default function SettingsPage() {
               <div>
                 <Label className="text-sm font-semibold mb-2 block">Backend URL</Label>
                 <Input
-                  defaultValue={process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'}
+                  defaultValue={BACKEND_URL}
                   readOnly
                   className="bg-muted border-border"
                 />
                 <p className="text-xs text-muted-foreground mt-2">
-                  Set NEXT_PUBLIC_BACKEND_URL environment variable to customize
+                  Active source: {BACKEND_URL_SOURCE}. Set `NEXT_PUBLIC_BACKEND_URL`
+                  in `.env.local` to point the frontend at the intended FastAPI server.
                 </p>
+                {IS_DEFAULT_BACKEND_URL ? (
+                  <p className="text-xs text-amber-600 mt-2">
+                    No `NEXT_PUBLIC_BACKEND_URL` is set right now, so the app is using the
+                    fallback `http://localhost:8000`. That only works if this browser can
+                    reach the FastAPI server on the same machine.
+                  </p>
+                ) : null}
               </div>
 
               <div>
                 <Label className="text-sm font-semibold mb-2 block">Backend Status</Label>
                 <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                  <span className="text-sm font-medium">Connected</span>
-                  <Badge variant="outline" className="ml-auto">Ready</Badge>
+                  <div className={`w-2 h-2 rounded-full ${backendStatusIndicatorClass}`} />
+                  <span className="text-sm font-medium">
+                    {backendStatusLabel}
+                  </span>
+                  <Badge variant="outline" className="ml-auto">
+                    {backendStatusBadge}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  {backendStatus === 'reachable'
+                    ? `Confirmed with GET /api/health at ${new Date(
+                        healthTimestamp ?? ''
+                      ).toLocaleString()}.`
+                    : 'This check only confirms API reachability. It does not prove the browser upload flow end-to-end.'}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-border bg-card/50 p-4 space-y-3">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 text-green-500" />
+                  <div>
+                    <p className="text-sm font-semibold">Backend image detection</p>
+                    <p className="text-xs text-muted-foreground">
+                      Fresh local validation on April 21, 2026 confirmed that
+                      `backend/main.py` starts, `POST /api/detect/image` returns a
+                      successful JSON response, and the annotated image URL serves a file.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  {backendStatus === 'checking' ? (
+                    <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-amber-500" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />
+                  )}
+                  <div>
+                    <p className="text-sm font-semibold">Browser upload validation</p>
+                    <p className="text-xs text-muted-foreground">
+                      Manual browser confirmation is still required for the full Upload
+                      page flow. A health check is not the same as selecting an image in
+                      the UI, running detection, and visually confirming the returned
+                      annotated image preview in the browser.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

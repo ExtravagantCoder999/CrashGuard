@@ -10,12 +10,53 @@ import {
   MOCK_NOTIFICATIONS,
 } from './types'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+export const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true'
-const NORMALIZED_BACKEND_URL = BACKEND_URL.replace(/\/+$/, '')
+export const NORMALIZED_BACKEND_URL = BACKEND_URL.replace(/\/+$/, '')
+export const IS_DEFAULT_BACKEND_URL = !process.env.NEXT_PUBLIC_BACKEND_URL
+export const BACKEND_URL_SOURCE = IS_DEFAULT_BACKEND_URL
+  ? 'Fallback default'
+  : 'NEXT_PUBLIC_BACKEND_URL'
+const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']
+const VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm', 'avi', 'm4v', 'mkv']
+export type DetectionMediaType = 'image' | 'video'
+
+function buildBackendUnreachableMessage() {
+  const guidance = [
+    `Could not reach the backend at ${NORMALIZED_BACKEND_URL}.`,
+    'Make sure the FastAPI server is running and that `NEXT_PUBLIC_BACKEND_URL` points to the correct address.',
+  ]
+
+  if (typeof window === 'undefined') {
+    return guidance.join(' ')
+  }
+
+  const pageUrl = new URL(window.location.href)
+  const backendUrl = new URL(NORMALIZED_BACKEND_URL)
+
+  if (
+    pageUrl.protocol === 'https:' &&
+    backendUrl.protocol === 'http:'
+  ) {
+    guidance.push(
+      'This page is loaded over HTTPS but the backend uses HTTP, so the browser may be blocking the request as mixed content.'
+    )
+  }
+
+  if (
+    IS_DEFAULT_BACKEND_URL &&
+    !['localhost', '127.0.0.1'].includes(pageUrl.hostname)
+  ) {
+    guidance.push(
+      'The app is using the fallback `http://localhost:8000`, which only works when this browser can reach the API on the same machine.'
+    )
+  }
+
+  return guidance.join(' ')
+}
 
 function createMockDetectionResponse(
-  mediaType: 'image' | 'video'
+  mediaType: DetectionMediaType
 ): DetectionResponse {
   return {
     success: true,
@@ -36,6 +77,55 @@ function createMockDetectionResponse(
         box: [140, 150, 260, 300],
       },
     ],
+  }
+}
+
+export function detectMediaTypeFromFile(
+  file: Pick<File, 'name' | 'type'>
+): DetectionMediaType | null {
+  if (file.type.startsWith('image/')) {
+    return 'image'
+  }
+
+  if (file.type.startsWith('video/')) {
+    return 'video'
+  }
+
+  const extension = file.name.split('.').pop()?.toLowerCase()
+
+  if (extension && IMAGE_EXTENSIONS.includes(extension)) {
+    return 'image'
+  }
+
+  if (extension && VIDEO_EXTENSIONS.includes(extension)) {
+    return 'video'
+  }
+
+  return null
+}
+
+function validateDetectionFile(
+  file: File,
+  mediaType: DetectionMediaType
+) {
+  if (!(file instanceof File)) {
+    throw new Error('No file was provided for detection.')
+  }
+
+  if (file.size <= 0) {
+    throw new Error('The selected file is empty. Please choose a valid image or video.')
+  }
+
+  if (mediaType === 'image') {
+    if (detectMediaTypeFromFile(file) !== 'image') {
+      throw new Error('Please choose a valid image file before running detection.')
+    }
+
+    return
+  }
+
+  if (detectMediaTypeFromFile(file) !== 'video') {
+    throw new Error('Please choose a valid video file before running detection.')
   }
 }
 
@@ -124,24 +214,40 @@ async function readErrorMessage(
  */
 export async function detectFromFile(
   file: File,
-  mediaType: 'image' | 'video'
+  mediaType?: DetectionMediaType
 ): Promise<DetectionResponse> {
   try {
+    const resolvedMediaType = mediaType ?? detectMediaTypeFromFile(file)
+
+    if (!resolvedMediaType) {
+      throw new Error('Please select an image or video file.')
+    }
+
+    validateDetectionFile(file, resolvedMediaType)
+
     const formData = new FormData()
     formData.append('file', file)
 
     let response: Response
 
     try {
-      response = await fetch(`${NORMALIZED_BACKEND_URL}/api/detect/${mediaType}`, {
+      console.info(
+        `[detect] Sending ${resolvedMediaType} file to backend`,
+        {
+          endpoint: `${NORMALIZED_BACKEND_URL}/api/detect/${resolvedMediaType}`,
+          filename: file.name,
+          size: file.size,
+          type: file.type || 'unknown',
+        }
+      )
+
+      response = await fetch(`${NORMALIZED_BACKEND_URL}/api/detect/${resolvedMediaType}`, {
         method: 'POST',
         body: formData,
       })
     } catch (error) {
       if (error instanceof TypeError) {
-        throw new Error(
-          `Could not reach the backend at ${NORMALIZED_BACKEND_URL}. Check NEXT_PUBLIC_BACKEND_URL and make sure the FastAPI server is running.`
-        )
+        throw new Error(buildBackendUnreachableMessage())
       }
 
       throw error
@@ -152,15 +258,29 @@ export async function detectFromFile(
         response,
         `Detection failed with status ${response.status}.`
       )
+      console.warn('[detect] Backend returned an error response', {
+        mediaType: resolvedMediaType,
+        status: response.status,
+        message,
+      })
       throw new Error(message)
     }
 
-    return (await response.json()) as DetectionResponse
+    const result = (await response.json()) as DetectionResponse
+    console.info('[detect] Detection completed', {
+      mediaType: resolvedMediaType,
+      accident_detected: result.accident_detected,
+      annotated_media_available: result.annotated_media_available,
+      annotated_media_url: result.annotated_media_url,
+    })
+    return result
   } catch (error) {
     console.error('Detection request failed:', error)
     if (USE_MOCK_DATA) {
       console.warn('Falling back to mock detection response')
-      return createMockDetectionResponse(mediaType)
+      return createMockDetectionResponse(
+        mediaType ?? detectMediaTypeFromFile(file) ?? 'image'
+      )
     }
 
     if (error instanceof Error) {

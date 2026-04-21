@@ -129,6 +129,7 @@ export function CameraCapture({
     setError('')
 
     try {
+      console.info('[camera] Requesting browser camera access')
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: 'environment' },
@@ -139,8 +140,10 @@ export function CameraCapture({
       })
 
       setStream(mediaStream)
+      console.info('[camera] Camera stream started')
     } catch (cameraError) {
       const message = getCameraErrorMessage(cameraError)
+      console.warn('[camera] Camera start failed', cameraError)
       setError(message)
       onError?.(message)
     } finally {
@@ -223,6 +226,12 @@ export function CameraCapture({
 
     const file = new File([blob], `camera-capture-${Date.now()}.jpg`, {
       type: 'image/jpeg',
+    })
+
+    console.info('[camera] Captured image ready', {
+      filename: file.name,
+      size: file.size,
+      type: file.type,
     })
 
     onMediaReady?.({

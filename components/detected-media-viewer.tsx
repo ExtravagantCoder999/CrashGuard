@@ -9,19 +9,23 @@ import { resolveBackendMediaUrl } from '@/lib/api-client'
 interface DetectedMediaViewerProps {
   buttonLabel?: string
   description: string
+  fallbackUrl?: string | null
   initialOpen?: boolean
   mediaType: 'image' | 'video'
   mediaUrl: string | null
   title: string
+  warning?: string | null
 }
 
 export function DetectedMediaViewer({
   buttonLabel,
   description,
+  fallbackUrl,
   initialOpen = false,
   mediaType,
   mediaUrl,
   title,
+  warning,
 }: DetectedMediaViewerProps) {
   const [open, setOpen] = useState(initialOpen)
 
@@ -29,14 +33,18 @@ export function DetectedMediaViewer({
     () => resolveBackendMediaUrl(mediaUrl),
     [mediaUrl]
   )
+  const resolvedFallbackUrl = useMemo(
+    () => resolveBackendMediaUrl(fallbackUrl),
+    [fallbackUrl]
+  )
 
   useEffect(() => {
-    if (initialOpen && resolvedMediaUrl) {
+    if (initialOpen && (resolvedMediaUrl || resolvedFallbackUrl)) {
       setOpen(true)
     }
-  }, [initialOpen, resolvedMediaUrl])
+  }, [initialOpen, resolvedFallbackUrl, resolvedMediaUrl])
 
-  if (!resolvedMediaUrl) {
+  if (!resolvedMediaUrl && !resolvedFallbackUrl) {
     return null
   }
 
@@ -51,8 +59,10 @@ export function DetectedMediaViewer({
         onOpenChange={setOpen}
         mediaType={mediaType}
         mediaUrl={resolvedMediaUrl}
+        fallbackUrl={resolvedFallbackUrl}
         title={title}
         description={description}
+        warning={warning}
       />
     </>
   )

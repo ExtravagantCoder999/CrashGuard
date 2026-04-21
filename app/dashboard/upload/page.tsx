@@ -3,7 +3,6 @@
 import {
   ChangeEvent,
   DragEvent,
-  MutableRefObject,
   useEffect,
   useMemo,
   useRef,
@@ -13,6 +12,7 @@ import {
   AlertTriangle,
   Camera,
   CheckCircle2,
+  ExternalLink,
   ImageIcon,
   Loader,
   Upload,
@@ -31,7 +31,11 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/hooks/use-toast'
-import { detectFromFile } from '@/lib/api-client'
+import {
+  detectFromFile,
+  detectMediaTypeFromFile,
+  resolveBackendMediaUrl,
+} from '@/lib/api-client'
 import { DetectionResponse } from '@/lib/types'
 
 type UploadMode = 'upload' | 'camera'
@@ -41,34 +45,6 @@ interface SelectedMedia {
   label: string
   mediaType: 'image' | 'video'
   previewUrl: string
-}
-
-function getSelectedMediaType(file: File): 'image' | 'video' | null {
-  if (file.type.startsWith('image/')) {
-    return 'image'
-  }
-
-  if (file.type.startsWith('video/')) {
-    return 'video'
-  }
-
-  const extension = file.name.split('.').pop()?.toLowerCase()
-
-  if (
-    extension &&
-    ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(extension)
-  ) {
-    return 'image'
-  }
-
-  if (
-    extension &&
-    ['mp4', 'mov', 'webm', 'avi', 'm4v', 'mkv'].includes(extension)
-  ) {
-    return 'video'
-  }
-
-  return null
 }
 
 export default function UploadPage() {
@@ -106,6 +82,12 @@ export default function UploadPage() {
     () => (mode === 'upload' ? uploadedMedia : cameraMedia),
     [cameraMedia, mode, uploadedMedia]
   )
+  const resultHasPreview = Boolean(result?.annotated_media_url)
+  const resultHasDownloadOnly = Boolean(
+    result?.annotated_media_download_url && !result?.annotated_media_url
+  )
+  const imageResultHasFallbackPreviewMessage =
+    result?.media_type === 'image' && !resultHasPreview
 
   const clearResult = () => {
     setResult(null)
@@ -133,9 +115,13 @@ export default function UploadPage() {
   }
 
   const handleUploadSelection = (file: File) => {
-    const mediaType = getSelectedMediaType(file)
+    const mediaType = detectMediaTypeFromFile(file)
 
     if (!mediaType) {
+      console.warn('[upload] Unsupported file selected', {
+        filename: file.name,
+        type: file.type || 'unknown',
+      })
       showError('Please select an image or video file.')
       return
     }
@@ -185,6 +171,13 @@ export default function UploadPage() {
   }
 
   const handleCameraMediaReady = (media: CameraCapturedMedia) => {
+    console.info('[upload] Camera media ready', {
+      label: media.label,
+      mediaType: media.mediaType,
+      filename: media.file.name,
+      size: media.file.size,
+      type: media.file.type || 'unknown',
+    })
     replacePreviewUrl(cameraPreviewUrlRef, media.previewUrl)
 
     setCameraMedia({
@@ -223,11 +216,28 @@ export default function UploadPage() {
     setResult(null)
 
     try {
-      const detectionResult = await detectFromFile(
-        activeMedia.file,
-        activeMedia.mediaType
-      )
+      const resolvedMediaType = detectMediaTypeFromFile(activeMedia.file)
+
+      if (!resolvedMediaType) {
+        throw new Error('Please select an image or video file.')
+      }
+
+      console.info('[upload] Running detection', {
+        source: mode === 'upload' ? 'local-upload' : 'camera-capture',
+        mediaType: resolvedMediaType,
+        filename: activeMedia.file.name,
+        size: activeMedia.file.size,
+      })
+
+      const detectionResult = await detectFromFile(activeMedia.file, resolvedMediaType)
       setResult(detectionResult)
+
+      console.info('[upload] Detection result received', {
+        mediaType: detectionResult.media_type,
+        accidentDetected: detectionResult.accident_detected,
+        annotatedMediaUrl: detectionResult.annotated_media_url,
+        annotatedMediaAvailable: detectionResult.annotated_media_available,
+      })
 
       if (detectionResult.accident_detected) {
         try {
@@ -246,8 +256,19 @@ export default function UploadPage() {
           ).toFixed(0)}% confidence at ${detectionResult.location}.`,
           variant: 'destructive',
         })
+      } else {
+        toast({
+          title: detectionResult.annotated_media_url
+            ? 'Detection Complete'
+            : 'Detection Complete Without Preview',
+          description: detectionResult.annotated_media_url
+            ? 'The backend returned a detection result and an annotated preview.'
+            : detectionResult.processing_notes ??
+              'The backend returned a detection result, but no annotated preview image was available.',
+        })
       }
     } catch (detectionError) {
+      console.warn('[upload] Detection failed', detectionError)
       showError(
         detectionError instanceof Error
           ? detectionError.message
@@ -289,6 +310,16 @@ export default function UploadPage() {
       : 'This is the annotated image generated by the detector.'
   const previewButtonLabel =
     result?.media_type === 'video' ? 'View Footage' : 'View Image'
+  const hasAnnotatedMediaResult =
+    result?.media_type === 'image'
+      ? Boolean(result.annotated_media_url)
+      : Boolean(
+          result?.annotated_media_url ||
+            result?.annotated_media_download_url
+        )
+  const resolvedOutputFileUrl = resolveBackendMediaUrl(
+    result?.annotated_media_download_url ?? null
+  )
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -311,6 +342,32 @@ export default function UploadPage() {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
+
+          {!error && loading ? (
+            <Alert>
+              <Loader className="h-4 w-4 animate-spin" />
+              <AlertDescription>
+                Sending the {activeMedia?.mediaType ?? 'selected'} file to the backend and
+                waiting for detection to finish.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {!error && !loading && result ? (
+            <Alert>
+              <CheckCircle2 className="h-4 w-4" />
+              <AlertDescription>
+                {resultHasPreview
+                  ? `Detection succeeded and the backend returned an annotated ${result.media_type} preview.`
+                  : resultHasDownloadOnly
+                    ? 'Detection succeeded, but only a non-inline output file is available.'
+                    : imageResultHasFallbackPreviewMessage
+                      ? result.processing_notes ??
+                        'Detection succeeded, but no annotated image preview was available.'
+                      : 'Detection succeeded, but no annotated preview was returned.'}
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           <Tabs
             value={mode}
@@ -462,7 +519,7 @@ export default function UploadPage() {
             <TabsContent value="camera" className="space-y-4">
               <CameraCapture
                 disabled={loading}
-                onError={setError}
+                onError={showError}
                 onMediaReady={handleCameraMediaReady}
               />
 
@@ -610,18 +667,39 @@ export default function UploadPage() {
                 </div>
 
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  {result.media_type === 'video' && !result.annotated_media_url ? (
-                    <p className="flex-1 text-sm text-muted-foreground">
-                      No annotated footage preview available.
-                    </p>
+                  {!hasAnnotatedMediaResult ? (
+                    <div className="flex-1 space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        {result.media_type === 'video'
+                          ? result.annotated_media_warning ??
+                            'No annotated footage preview available.'
+                          : result.annotated_media_warning ??
+                            'No annotated image preview available.'}
+                      </p>
+                      {result.processing_notes ? (
+                        <p className="text-sm text-muted-foreground/80">
+                          {result.processing_notes}
+                        </p>
+                      ) : null}
+                      {resolvedOutputFileUrl ? (
+                        <Button asChild variant="outline">
+                          <a href={resolvedOutputFileUrl} target="_blank" rel="noreferrer">
+                            <ExternalLink className="h-4 w-4" />
+                            Open Output File
+                          </a>
+                        </Button>
+                      ) : null}
+                    </div>
                   ) : (
                     <DetectedMediaViewer
                       initialOpen={result.accident_detected}
                       mediaType={result.media_type}
                       mediaUrl={result.annotated_media_url ?? null}
+                      fallbackUrl={result.annotated_media_download_url ?? null}
                       title={previewTitle}
                       description={previewDescription}
                       buttonLabel={previewButtonLabel}
+                      warning={result.annotated_media_warning}
                     />
                   )}
 
