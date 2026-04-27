@@ -1,16 +1,27 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { ArrowRight, Image as ImageIcon, Play, Video } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Image as ImageIcon,
+  Loader,
+  Play,
+  Video,
+} from 'lucide-react'
 
 import { DashboardHeader, Sidebar } from '@/components/dashboard-sidebar'
+import { DetectedMediaViewer } from '@/components/detected-media-viewer'
 import { LiveCamera } from '@/components/live-camera'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/hooks/use-toast'
+import { detectFromFile } from '@/lib/api-client'
+import { DetectionResponse } from '@/lib/types'
 
 interface Sample {
   confidence: number
@@ -25,57 +36,57 @@ interface Sample {
 const SAMPLES: Sample[] = [
   {
     id: 'sample-1',
-    title: 'Highway Collision - Exit 45',
-    description: 'Multi-vehicle collision on highway during peak traffic',
-    type: 'video',
-    url: '/samples/collision-highway.mp4',
+    title: 'CCTV Collision Sample 1',
+    description: 'Dataset image labeled with an accident class.',
+    type: 'image',
+    url: '/samples/accident-01.jpg',
     hasAccident: true,
     confidence: 0.92,
   },
   {
     id: 'sample-2',
-    title: 'Intersection Rear-End',
-    description: 'Two-car rear-end collision at urban intersection',
+    title: 'CCTV Collision Sample 2',
+    description: 'Dataset image with accident and vehicle labels.',
     type: 'image',
-    url: '/samples/collision-intersection.jpg',
+    url: '/samples/accident-02.jpg',
     hasAccident: true,
     confidence: 0.88,
   },
   {
     id: 'sample-3',
-    title: 'Urban Traffic Flow',
-    description: 'Normal traffic conditions with no accidents',
-    type: 'video',
-    url: '/samples/traffic-normal.mp4',
-    hasAccident: false,
-    confidence: 0.05,
+    title: 'CCTV Collision Sample 3',
+    description: 'Dataset image with multiple accident labels.',
+    type: 'image',
+    url: '/samples/accident-03.jpg',
+    hasAccident: true,
+    confidence: 0.86,
   },
   {
     id: 'sample-4',
-    title: 'Parking Lot Incident',
-    description: 'Minor collision in a parking area',
+    title: 'Vehicle Sample 1',
+    description: 'Dataset image labeled with vehicle objects only.',
     type: 'image',
-    url: '/samples/collision-parking.jpg',
-    hasAccident: true,
-    confidence: 0.75,
+    url: '/samples/vehicle-01.jpg',
+    hasAccident: false,
+    confidence: 0.18,
   },
   {
     id: 'sample-5',
-    title: 'Highway Normal Traffic',
-    description: 'Regular highway conditions without incidents',
-    type: 'video',
-    url: '/samples/traffic-highway.mp4',
+    title: 'Vehicle Sample 2',
+    description: 'Dataset image labeled with vehicle objects only.',
+    type: 'image',
+    url: '/samples/vehicle-02.jpg',
     hasAccident: false,
-    confidence: 0.03,
+    confidence: 0.12,
   },
   {
     id: 'sample-6',
-    title: 'Urban Intersection Normal',
-    description: 'Standard intersection traffic with no accidents',
+    title: 'Vehicle Sample 3',
+    description: 'Dataset image labeled with a vehicle object only.',
     type: 'image',
-    url: '/samples/traffic-intersection.jpg',
+    url: '/samples/vehicle-03.jpg',
     hasAccident: false,
-    confidence: 0.02,
+    confidence: 0.1,
   },
 ]
 
@@ -83,23 +94,60 @@ export default function SamplesPage() {
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [sampleResult, setSampleResult] = useState<DetectionResponse | null>(null)
+  const [sampleError, setSampleError] = useState('')
   const [showLiveCamera, setShowLiveCamera] = useState(false)
 
-  const router = useRouter()
   const { toast } = useToast()
 
-  const handleAnalyzeSample = (sample: Sample) => {
-    setIsAnalyzing(true)
+  const openSample = (sample: Sample) => {
+    setSelectedSample(sample)
+    setSampleResult(null)
+    setSampleError('')
+    setIsDialogOpen(true)
+  }
 
-    setTimeout(() => {
-      toast({
-        title: 'Sample Ready',
-        description: `Open the Upload page to test "${sample.title}" through the detection flow.`,
+  const handleAnalyzeSample = async (sample: Sample) => {
+    setIsAnalyzing(true)
+    setSampleError('')
+    setSampleResult(null)
+
+    try {
+      const response = await fetch(sample.url)
+
+      if (!response.ok) {
+        throw new Error(`Could not load ${sample.url} for analysis.`)
+      }
+
+      const blob = await response.blob()
+      const file = new File([blob], `${sample.id}.jpg`, {
+        type: blob.type || 'image/jpeg',
       })
+      const result = await detectFromFile(file, sample.type)
+
+      setSampleResult(result)
+      toast({
+        title: result.accident_detected ? 'Accident Detected' : 'Detection Complete',
+        description: `${sample.title} returned ${(result.confidence * 100).toFixed(
+          0
+        )}% accident confidence.`,
+        variant: result.accident_detected ? 'destructive' : 'default',
+      })
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Sample analysis failed. Please try again.'
+
+      setSampleError(message)
+      toast({
+        title: 'Sample Analysis Failed',
+        description: message,
+        variant: 'destructive',
+      })
+    } finally {
       setIsAnalyzing(false)
-      setIsDialogOpen(false)
-      router.push('/dashboard/upload')
-    }, 1200)
+    }
   }
 
   return (
@@ -163,10 +211,7 @@ export default function SamplesPage() {
                 <Card
                   key={sample.id}
                   className="group cursor-pointer overflow-hidden border border-border transition-all hover:border-primary/50 hover:shadow-lg"
-                  onClick={() => {
-                    setSelectedSample(sample)
-                    setIsDialogOpen(true)
-                  }}
+                  onClick={() => openSample(sample)}
                 >
                   <div className="relative aspect-video overflow-hidden bg-black/40">
                     {sample.type === 'video' ? (
@@ -218,8 +263,7 @@ export default function SamplesPage() {
                       className="w-full"
                       onClick={(event) => {
                         event.stopPropagation()
-                        setSelectedSample(sample)
-                        setIsDialogOpen(true)
+                        openSample(sample)
                       }}
                     >
                       View Details
@@ -294,12 +338,93 @@ export default function SamplesPage() {
                   disabled={isAnalyzing}
                   className="flex-1"
                 >
-                  {isAnalyzing ? 'Preparing...' : 'Analyze This Sample'}
+                  {isAnalyzing ? (
+                    <>
+                      <Loader className="mr-2 h-4 w-4 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    'Analyze This Sample'
+                  )}
                 </Button>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   Close
                 </Button>
               </div>
+
+              {sampleError ? (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription>{sampleError}</AlertDescription>
+                </Alert>
+              ) : null}
+
+              {sampleResult ? (
+                <Card className="border border-border bg-card/70 p-4">
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4 text-primary" />
+                      <p className="font-semibold">Backend Detection Result</p>
+                    </div>
+                    <Badge
+                      className={
+                        sampleResult.accident_detected
+                          ? 'border-destructive/50 bg-destructive/20 text-destructive'
+                          : 'border-green-500/50 bg-green-500/20 text-green-400'
+                      }
+                      variant="outline"
+                    >
+                      {sampleResult.accident_detected ? 'Accident' : 'No Accident'}
+                    </Badge>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Confidence</p>
+                      <p className="font-semibold">
+                        {(sampleResult.confidence * 100).toFixed(1)}%
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Detections</p>
+                      <p className="font-semibold">{sampleResult.detections.length}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Media Type</p>
+                      <p className="font-semibold capitalize">{sampleResult.media_type}</p>
+                    </div>
+                  </div>
+
+                  {sampleResult.detections.length > 0 ? (
+                    <div className="mt-4 space-y-2">
+                      {sampleResult.detections.slice(0, 5).map((detection, index) => (
+                        <div
+                          key={`${detection.label}-${index}`}
+                          className="flex items-center justify-between rounded border border-border/50 bg-card/50 p-2 text-sm"
+                        >
+                          <span className="capitalize">{detection.label}</span>
+                          <Badge variant="outline">
+                            {(detection.score * 100).toFixed(0)}%
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4">
+                    <DetectedMediaViewer
+                      buttonLabel="View Annotated Sample"
+                      description="This is the annotated output returned by the FastAPI backend."
+                      fallbackUrl={sampleResult.annotated_media_download_url ?? null}
+                      initialOpen={sampleResult.accident_detected}
+                      mediaType={sampleResult.media_type}
+                      mediaUrl={sampleResult.annotated_media_url ?? null}
+                      title="Detected Sample Output"
+                      warning={sampleResult.annotated_media_warning}
+                    />
+                  </div>
+                </Card>
+              ) : null}
             </div>
           )}
         </DialogContent>

@@ -1,12 +1,20 @@
+from pathlib import Path
+
+import torch
 from ultralytics import YOLO
 
-model = YOLO("yolov8n.pt")
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "best.pt"
+DATA_CONFIG = BASE_DIR / "data.yaml"
+
+device = 0 if torch.cuda.is_available() else "cpu"
+model = YOLO(str(MODEL_PATH))
 model.train(
-    data="data.yaml",
-    epochs=3,
+    data=str(DATA_CONFIG),
+    epochs=50,
     imgsz=640,
-    device="cpu",
+    device=device,
     workers=0,
-    project=".",
+    project=str(BASE_DIR),
     name="carcrash_train"
 )

@@ -231,7 +231,7 @@ export default function SettingsPage() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">Output Classes</span>
-                <span className="text-sm font-medium">Vehicle, Accident, Person</span>
+                <span className="text-sm font-medium">Accident, Vehicle</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">Backend Framework</span>

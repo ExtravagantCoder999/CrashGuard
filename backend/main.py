@@ -51,6 +51,14 @@ SUPPORTED_IMAGE_CONTENT_TYPES = {
     "image/webp",
     "image/gif",
 }
+SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".m4v", ".mkv"}
+SUPPORTED_VIDEO_CONTENT_TYPES = {
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+    "video/x-msvideo",
+    "video/x-matroska",
+}
 
 
 def log_image(message: str):
@@ -96,6 +104,46 @@ def is_supported_image_upload(file: UploadFile) -> bool:
         suffix in SUPPORTED_IMAGE_EXTENSIONS
         or content_type in SUPPORTED_IMAGE_CONTENT_TYPES
     )
+
+
+def is_supported_video_upload(file: UploadFile) -> bool:
+    filename = (file.filename or "").lower()
+    suffix = Path(filename).suffix
+    content_type = (file.content_type or "").lower()
+
+    return (
+        suffix in SUPPORTED_VIDEO_EXTENSIONS
+        or content_type in SUPPORTED_VIDEO_CONTENT_TYPES
+    )
+
+
+def get_env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def get_video_frame_skip(total_frames: int, fps: float) -> int:
+    """Choose a demo-friendly sampling rate while allowing env overrides."""
+    try:
+        configured_skip = int(os.getenv("VIDEO_FRAME_SKIP", "0"))
+    except ValueError:
+        configured_skip = 0
+
+    if configured_skip > 0:
+        return configured_skip
+
+    target_analysis_fps = get_env_float("VIDEO_ANALYSIS_FPS", 3.0)
+    target_analysis_fps = max(0.5, min(target_analysis_fps, fps or 30.0))
+
+    frame_skip = max(1, int(round((fps or 30.0) / target_analysis_fps)))
+
+    if total_frames >= 3600:
+        return max(frame_skip, 20)
+    if total_frames >= 900:
+        return max(frame_skip, 12)
+    return max(frame_skip, 8)
 
 
 def decode_uploaded_image(file_path: Path):
@@ -398,7 +446,28 @@ async def detect_video(request: Request, file: UploadFile = File(...)):
     processing_notes = None
 
     try:
+        if file is None:
+            log_video("Request did not include an uploaded file")
+            raise HTTPException(status_code=400, detail="No video file was uploaded.")
+
+        if not file.filename:
+            log_video("Uploaded video was missing a filename")
+            raise HTTPException(status_code=400, detail="No video file was uploaded.")
+
         log_video(f"\nStarting video detection for: {file.filename}")
+
+        if not is_supported_video_upload(file):
+            log_video(
+                "Rejected unsupported video upload "
+                f"filename={file.filename!r} content_type={file.content_type!r}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Unsupported video type. Please upload an MP4, MOV, WEBM, AVI, M4V, or MKV video."
+                ),
+            )
+
         file_path = save_upload_file(file)
         log_video(f"File saved to: {file_path}")
         
@@ -440,15 +509,7 @@ async def detect_video(request: Request, file: UploadFile = File(...)):
         processed_frames = 0
         frame_count = 0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        frame_skip = int(os.getenv('VIDEO_FRAME_SKIP', '0'))
-
-        if frame_skip <= 1:
-            if total_frames >= 3600:
-                frame_skip = 4
-            elif total_frames >= 900:
-                frame_skip = 3
-            else:
-                frame_skip = 2
+        frame_skip = get_video_frame_skip(total_frames, fps)
 
         log_video(f"Total frames: {total_frames}, frame_skip: {frame_skip}")
         last_annotated_frame = None
@@ -460,8 +521,9 @@ async def detect_video(request: Request, file: UploadFile = File(...)):
 
             frame_count += 1
 
-            # Skip frames for faster processing
-            if frame_count % frame_skip != 0:
+            # Process the first frame, then sample the rest for faster CPU demos.
+            should_process_frame = frame_count == 1 or (frame_count - 1) % frame_skip == 0
+            if not should_process_frame:
                 # Reuse previous annotated frame for skipped frames (if available)
                 if writer is not None and last_annotated_frame is not None:
                     writer.write(last_annotated_frame)
